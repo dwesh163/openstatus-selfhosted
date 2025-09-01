@@ -1,0 +1,71 @@
+# OpenStatus Web App - Self-hosted optimized Docker image
+# Build from source: https://github.com/openstatusHQ/openstatus
+
+ARG OPENSTATUS_REPO=https://github.com/openstatusHQ/openstatus.git
+ARG OPENSTATUS_BRANCH=main
+
+# Stage 1: Clone source
+FROM node:22-alpine AS source
+ARG OPENSTATUS_REPO
+ARG OPENSTATUS_BRANCH
+
+RUN apk add --no-cache git
+WORKDIR /src
+RUN git clone --branch ${OPENSTATUS_BRANCH} --depth 1 ${OPENSTATUS_REPO} .
+
+# Stage 2: Install dependencies
+FROM node:22-alpine AS deps
+RUN apk add --no-cache libc6-compat && npm install -g pnpm
+
+WORKDIR /app
+COPY --from=source /src/package.json /src/pnpm-lock.yaml /src/pnpm-workspace.yaml ./
+COPY --from=source /src/apps/web/package.json ./apps/web/
+COPY --from=source /src/packages ./packages
+
+RUN pnpm install --frozen-lockfile
+
+# Stage 3: Build web app
+FROM node:22-alpine AS build
+RUN npm install -g pnpm
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+WORKDIR /app
+COPY --from=source /src .
+COPY --from=deps /app/node_modules ./node_modules
+
+RUN pnpm build --filter=@openstatus/web
+
+# Stage 4: Runtime
+FROM node:22-alpine AS runtime
+RUN apk add --no-cache curl && \
+    addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Copy built application
+COPY --from=build /app/apps/web/public ./apps/web/public
+COPY --from=build --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+
+USER nextjs
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000/api/health || exit 1
+
+CMD ["node", "apps/web/server.js"]
+
+# Labels for identification
+LABEL org.opencontainers.image.title="OpenStatus Web"
+LABEL org.opencontainers.image.description="OpenStatus Web Application - Self-hosted"
+LABEL org.opencontainers.image.url="https://github.com/openstatusHQ/openstatus"
+LABEL org.opencontainers.image.source="https://github.com/openstatusHQ/openstatus"
