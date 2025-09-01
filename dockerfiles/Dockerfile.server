@@ -1,0 +1,52 @@
+# OpenStatus Server - Self-hosted optimized Docker image
+# Build from source: https://github.com/openstatusHQ/openstatus
+
+ARG OPENSTATUS_REPO=https://github.com/openstatusHQ/openstatus.git
+ARG OPENSTATUS_BRANCH=main
+
+# Stage 1: Clone and install dependencies
+FROM oven/bun:latest AS source
+ARG OPENSTATUS_REPO
+ARG OPENSTATUS_BRANCH
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --branch ${OPENSTATUS_BRANCH} --depth 1 ${OPENSTATUS_REPO} .
+
+WORKDIR /src
+RUN bun install --frozen-lockfile --production
+
+# Stage 2: Build server
+FROM oven/bun:latest AS build
+ENV NODE_ENV=production
+
+COPY --from=source /src /app
+WORKDIR /app/apps/server
+
+RUN bun build --compile --sourcemap src/index.ts --outfile=server
+
+# Stage 3: Runtime
+FROM debian:bookworm-slim AS runtime
+
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -r -u 1001 -g root openstatus
+
+# Copy the compiled binary
+COPY --from=build --chown=1001:root --chmod=755 /app/apps/server/server /usr/local/bin/server
+
+USER 1001
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/server"]
+
+# Labels for identification
+LABEL org.opencontainers.image.title="OpenStatus Server"
+LABEL org.opencontainers.image.description="OpenStatus API Server - Self-hosted"
+LABEL org.opencontainers.image.url="https://github.com/openstatusHQ/openstatus"
+LABEL org.opencontainers.image.source="https://github.com/openstatusHQ/openstatus"
