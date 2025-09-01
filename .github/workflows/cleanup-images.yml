@@ -1,0 +1,38 @@
+name: Cleanup Old Docker Images
+
+on:
+  schedule:
+    # Run cleanup every Monday at 3 AM UTC
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/openstatus
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        service: [server, workflows, web, dashboard, screenshot-service]
+
+    steps:
+      - name: Delete old container images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: 'openstatus-${{ matrix.service }}'
+          package-type: 'container'
+          min-versions-to-keep: 5
+          delete-only-untagged-versions: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate cleanup summary
+        run: |
+          echo "## 🧹 Cleanup Completed" >> $GITHUB_STEP_SUMMARY
+          echo "Service: **${{ matrix.service }}**" >> $GITHUB_STEP_SUMMARY
+          echo "Kept the 5 most recent versions" >> $GITHUB_STEP_SUMMARY
