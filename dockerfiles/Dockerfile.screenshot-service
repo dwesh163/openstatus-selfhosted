@@ -1,0 +1,58 @@
+# OpenStatus Screenshot Service - Self-hosted optimized Docker image
+# Build from source: https://github.com/openstatusHQ/openstatus
+
+ARG OPENSTATUS_REPO=https://github.com/openstatusHQ/openstatus.git
+ARG OPENSTATUS_BRANCH=main
+
+# Stage 1: Clone source
+FROM node:22-bookworm AS source
+ARG OPENSTATUS_REPO
+ARG OPENSTATUS_BRANCH
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --branch ${OPENSTATUS_BRANCH} --depth 1 ${OPENSTATUS_REPO} .
+
+# Stage 2: Build and runtime (combined for screenshot service with Playwright)
+FROM node:22-bookworm AS runtime
+
+# Install Playwright dependencies
+RUN npx -y playwright@1.46.0 install --with-deps
+
+# Install pnpm and bun
+RUN npm install -g pnpm bun
+
+WORKDIR /app
+
+# Copy source code
+COPY --from=source /src .
+
+# Clean up unnecessary apps to reduce image size
+RUN rm -rf /app/apps/docs && \
+    rm -rf /app/apps/web && \
+    rm -rf /app/apps/server && \
+    rm -rf /app/apps/dashboard && \
+    rm -rf /app/packages/api && \
+    rm -rf /app/packages/integrations
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+WORKDIR /app/apps/screenshot-service
+
+EXPOSE 3000
+
+# Add curl for health checks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+CMD ["bun", "start"]
+
+# Labels for identification
+LABEL org.opencontainers.image.title="OpenStatus Screenshot Service"
+LABEL org.opencontainers.image.description="OpenStatus Screenshot Service - Self-hosted"
+LABEL org.opencontainers.image.url="https://github.com/openstatusHQ/openstatus"
+LABEL org.opencontainers.image.source="https://github.com/openstatusHQ/openstatus"
