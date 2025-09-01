@@ -1,0 +1,240 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  database:
+    image: postgres:16-alpine
+    container_name: openstatus-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openstatus
+      POSTGRES_USER: openstatus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openstatus -d openstatus"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: openstatus-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # OpenStatus API Server
+  server:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-openstatus}/openstatus-server:${OPENSTATUS_VERSION:-latest}
+    container_name: openstatus-server
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://openstatus:${POSTGRES_PASSWORD}@database:5432/openstatus
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      
+      # Required external services
+      TINY_BIRD_API_KEY: ${TINY_BIRD_API_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      UNKEY_TOKEN: ${UNKEY_TOKEN}
+      
+      # Optional services
+      QSTASH_TOKEN: ${QSTASH_TOKEN:-}
+      SCREENSHOT_SERVICE_URL: http://screenshot-service:3000
+      
+      # Notifications
+      TWILLIO_AUTH_TOKEN: ${TWILLIO_AUTH_TOKEN:-}
+      TWILLIO_ACCOUNT_ID: ${TWILLIO_ACCOUNT_ID:-}
+      
+      # Analytics
+      NEXT_PUBLIC_OPENPANEL_CLIENT_ID: ${NEXT_PUBLIC_OPENPANEL_CLIENT_ID:-}
+      OPENPANEL_CLIENT_SECRET: ${OPENPANEL_CLIENT_SECRET:-}
+      
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # OpenStatus Workflows (Cron Jobs)
+  workflows:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-openstatus}/openstatus-workflows:${OPENSTATUS_VERSION:-latest}
+    container_name: openstatus-workflows
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://openstatus:${POSTGRES_PASSWORD}@database:5432/openstatus
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      
+      # Required external services
+      TINY_BIRD_API_KEY: ${TINY_BIRD_API_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      UNKEY_TOKEN: ${UNKEY_TOKEN}
+      
+      # Optional services
+      QSTASH_TOKEN: ${QSTASH_TOKEN:-}
+      
+      # Notifications
+      TWILLIO_AUTH_TOKEN: ${TWILLIO_AUTH_TOKEN:-}
+      TWILLIO_ACCOUNT_ID: ${TWILLIO_ACCOUNT_ID:-}
+      
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Screenshot Service
+  screenshot-service:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-openstatus}/openstatus-screenshot-service:${OPENSTATUS_VERSION:-latest}
+    container_name: openstatus-screenshots
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # OpenStatus Web Application
+  web:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-openstatus}/openstatus-web:${OPENSTATUS_VERSION:-latest}
+    container_name: openstatus-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://openstatus:${POSTGRES_PASSWORD}@database:5432/openstatus
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      
+      # URLs
+      NEXT_PUBLIC_URL: ${NEXT_PUBLIC_URL:-http://localhost:3000}
+      NEXTAUTH_URL: ${NEXT_PUBLIC_URL:-http://localhost:3000}
+      EXTERNAL_API_URL: http://server:3000
+      
+      # Authentication
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      AUTH_SECRET: ${NEXTAUTH_SECRET}
+      AUTH_GITHUB_ID: ${AUTH_GITHUB_ID:-}
+      AUTH_GITHUB_SECRET: ${AUTH_GITHUB_SECRET:-}
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID:-}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET:-}
+      
+      # Stripe (optional)
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET_KEY: ${STRIPE_WEBHOOK_SECRET_KEY:-}
+      
+      # External services
+      TINY_BIRD_API_KEY: ${TINY_BIRD_API_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      UNKEY_TOKEN: ${UNKEY_TOKEN}
+      QSTASH_TOKEN: ${QSTASH_TOKEN:-}
+      
+      # Vercel integration (optional)
+      PROJECT_ID_VERCEL: ${PROJECT_ID_VERCEL:-}
+      TEAM_ID_VERCEL: ${TEAM_ID_VERCEL:-}
+      VERCEL_AUTH_BEARER_TOKEN: ${VERCEL_AUTH_BEARER_TOKEN:-}
+      BLOB_READ_WRITE_TOKEN: ${BLOB_READ_WRITE_TOKEN:-}
+      
+      # Monitoring (optional)
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      
+      # Analytics (optional)
+      NEXT_PUBLIC_OPENPANEL_CLIENT_ID: ${NEXT_PUBLIC_OPENPANEL_CLIENT_ID:-}
+      OPENPANEL_CLIENT_SECRET: ${OPENPANEL_CLIENT_SECRET:-}
+      
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # OpenStatus Dashboard (optional)
+  dashboard:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-openstatus}/openstatus-dashboard:${OPENSTATUS_VERSION:-latest}
+    container_name: openstatus-dashboard
+    restart: unless-stopped
+    ports:
+      - "3003:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://openstatus:${POSTGRES_PASSWORD}@database:5432/openstatus
+      
+      # URLs
+      NEXT_PUBLIC_URL: ${DASHBOARD_URL:-http://localhost:3003}
+      NEXTAUTH_URL: ${DASHBOARD_URL:-http://localhost:3003}
+      EXTERNAL_API_URL: http://server:3000
+      
+      # Authentication
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      AUTH_SECRET: ${NEXTAUTH_SECRET}
+      
+    depends_on:
+      database:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Reverse Proxy (optional but recommended for production)
+  nginx:
+    image: nginx:alpine
+    container_name: openstatus-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - web
+      - server
+      - dashboard
+    profiles:
+      - with-nginx
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: openstatus-network
